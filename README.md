@@ -113,8 +113,7 @@ There are a few patterns to note though:
 
 ### Samples
 
-The helper.lt/lua file has plenty of real world examples that was extracted from my own subscription app. Feel free to adapt them for your own needs.
+The [sample/](https://github.com/gnois/lua-resty-stripe/tree/main/sample) folder has some real world examples. Feel free to adapt them for your own needs.
 
 Enjoy!
-
 
