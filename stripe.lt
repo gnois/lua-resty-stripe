@@ -1,0 +1,327 @@
+var json = require('cjson')
+
+var Host = "api.stripe.com"
+var Uri = "https://" .. Host .. "/v1/"
+
+
+-- random with decimal
+var rand = \min, max -> return min + 0.5 + math.random() * (max - min)
+
+var round = \num, decimals ->
+	var power = 10 ^ decimals
+	return math.floor(num * power) / power
+
+
+
+--`
+Converts
+
+phases: [
+	{
+		plans: [
+			{
+				plan: 'plan_DGenmbl4GbrTTa'
+				, quantity: 1
+			}
+		]
+		, iterations: 12
+	}
+]
+
+Into
+
+phases[0][plans][0][plan]=plan_DGenmbl4GbrTTa
+phases[0][plans][0][quantity]=1
+phases[0][iterations]=12
+`
+
+var explode
+explode = \obj ->
+	var out = {}
+	if obj
+		for k, v in pairs(obj)
+			var n = tonumber(k)
+			if n
+				n = n - 1
+			else
+				n = k
+			var key = '[' .. n .. ']'
+			if 'table' == type(v)
+				for x, y in pairs(explode(v))
+					out[key .. x] = y
+			else
+				out[key] = v
+	return out
+
+--``
+var e = explode({1,2,3})
+e = explode({{
+	plans = {
+		{
+			plan = 'plan_DGenmbl4GbrTTa'
+			, quantity = 1
+		}
+	}
+	, iterations = 12
+}})
+``
+
+-- params must be {}
+var merge = \params, opt ->
+	if opt
+		for key, val in pairs(opt)
+			if 'table' == type(val)
+				for k, v in pairs(explode(val))
+					params[key .. k] = v
+			else
+				params[key] = val
+	return params
+
+
+
+var escape = \txt ->
+	if "string" == type(txt)
+		var s = string.gsub(txt, "([^0-9a-zA-Z !'()*._~-])", \c ->
+			return string.format ("%%%02X", string.byte(c))
+		)
+		return string.gsub(s, " ", "+")
+	return tostring(txt)
+
+
+
+----------------------------------------------------------------------------
+-- ngx.encode_args() gives error buffer mismatch, maybe due to embedded '[]' in table
+var encode_args = \t ->
+	if t and next(t)
+		var acc, a = {}, 1
+		for key, val in pairs(t)
+			if "table" ==  type(val)
+				for _, v in ipairs(val)
+					acc[a] = key .. "=" .. escape(v)
+			else
+				acc[a] = key .. "=" .. escape(val)
+			a = a + 1
+		return table.concat(acc, '&')
+	return ""
+
+
+-- deep traverse to convert ngx.null to null in-place
+var fix_null
+fix_null = \tb ->
+	for k, v in pairs(tb)
+		if v == ngx.null
+			tb[k] = nil
+		else if "table" == type(v)
+			fix_null(v)
+
+
+-- params:
+--  a lua-resty-http client
+--  api key from stripe account
+return \client, api_key ->
+
+	var request = \method, path, params, header ->
+		var url = Uri .. path
+
+		var body
+		if params
+			params = merge({}, params)
+			body = encode_args(params)
+
+		var headers = {
+			"Host" = Host
+			, "Authorization" = "Basic " .. ngx.encode_base64(api_key)
+			, "Accept" = "application/json"
+			, "Content-Type" = "application/x-www-form-urlencoded"
+			--, "User-Agent" = "curl/7.66.0"
+		}
+		if header -- allow overwrite
+			for k, v in pairs(header)
+				headers[k] = v
+
+		var opt = {
+			method = method
+			, headers = headers
+			, ssl_verify = false  -- else unable to get local issuer certificate, or see https://github.com/ledgetech/lua-resty-http/issues/42
+		}
+
+		if body
+			if method == "GET"
+				opt.query = body
+			else
+				body = string.gsub(body, "%%5B", '[').gsub(@, "%%5D", ']')
+				opt.body = body
+				headers["Content-Length"] = #body
+
+		var res, err
+		-- only retry if Idempotency-Key exists
+		var retries = headers['Idempotency-Key'] and 3 or 1
+		for i = 1, retries
+			res, err = client.request_uri(@, url, opt)
+			if res
+				var retry = res.headers['Stripe-Should-Retry']
+				if not retry or retry == "false"  -- is text
+					var data = json.decode(res.body)
+					fix_null(data)
+					if res.status < 200 or res.status > 299
+						var msg = data and data.error and data.error.message
+						ngx.log(ngx.ERR, res.status, " ", msg or "stripe error without message")
+						if msg
+							var shorten = string.match(data.error.message, '^(.+)%.%s%u.+$')
+							if shorten
+								data.error.message = shorten
+
+					return res.status, res.headers, data
+			if err
+				ngx.log(ngx.ERR, "HTTP request error: ", err)
+			ngx.sleep(round(rand(3, 8), 3))
+		return ngx.HTTP_SERVICE_UNAVAILABLE, err -- err is string
+
+
+	var list = \class, params ->
+		return request("GET", class, params)
+	var get = \class, id, params ->
+		return request("GET", class .. "/" .. id, params)
+
+	-- only post takes idempotency key headers
+	var create = \class, params, headers ->
+		return request("POST", class, params, headers)
+	var post = \class, id, params, headers ->
+		return request("POST", class .. "/" .. id, params, headers)
+
+	var delete = \class, id, params ->
+		return request("DELETE", class .. "/" .. id, params)
+
+
+	var K = {}
+
+	var Balance = "balance"
+	K.balance = {
+		get = \opt -> return list(Balance, opt)
+	}
+
+	var BalanceTransactions = "balance_transactions"
+	K.balance_transactions = {
+		get = \id, opt -> return get(BalanceTransactions, id, opt)
+		, list = \opt -> return list(BalanceTransactions, opt)
+	}
+
+	K.account = {
+	}
+
+	var Charges = "charges"
+	K.charge = {
+		get = \id, opt -> return get(Charges, id, opt)
+		, create = \... -> return create(Charges, ...)
+		, update = \id, ... -> return post(Charges, id, ...)
+		, capture = \id, ... -> return post(Charges, id .. "/capture", ...)
+		, list = \opt -> return list(Charges, opt)
+	}
+
+	var Customers = "customers"
+	K.customers = {
+		get = \id, opt -> return get(Customers, id, opt)
+		, create = \... -> return create(Customers, ...)
+		, update = \id, ... -> return post(Customers, id, ...)
+		, delete = \id -> return delete(Customers, id)
+		, list = \opt -> return list(Customers, opt)
+	}
+
+	var Invoices = "invoices"
+	K.invoices = {
+		get = \id, opt -> return get(Invoices, id, opt)
+		, upcoming = \opt -> return get(Invoices, "upcoming", opt)
+		, upcominglines = \opt -> return get(Invoices, "upcoming/lines", opt)
+		, lines = \id, opt -> return get(Invoices, id .. "/lines", opt)
+		, create = \... -> return create(Invoices, ...)
+		, update = \id, ... -> return post(Invoices, id, ...)
+		, finalize = \id, ... -> return post(Invoices, id .. "/finalize", ...)
+		, pay = \id, ... -> return post(Invoices, id .. "/pay", ...)
+		, send = \id, ... -> return post(Invoices, id .. "/send", ...)
+		, void = \id, ... -> return post(Invoices, id .. "/send", ...)
+		, bad = \id, ... -> return post(Invoices, id .. "/mark_uncollectible", ...)
+		, delete = \id -> return delete(Invoices, id)
+		, list = \opt -> return list(Invoices, opt)
+	}
+
+	var InvoiceItems = "invoiceitems"
+	K.invoice_items = {
+		create = \... -> return create(InvoiceItems, ...)
+		, get = \id -> return get(InvoiceItems, id)
+		, update = \id, ... -> return post(InvoiceItems, id, ...)
+		, delete = \id -> return delete(InvoiceItems, id)
+		, list = \opt -> return list(InvoiceItems, opt)
+	}
+
+	var PaymentIntents = "payment_intents"
+	K.payment_intents = {
+		create = \... -> return create(PaymentIntents, ...)
+		, get = \id, opt -> return get(PaymentIntents, id, opt)
+		, update = \id, ... -> return post(PaymentIntents, id, ...)
+		, confirm = \id, ... -> return post(PaymentIntents, id .. "/confirm", ...)
+		, capture = \id, ... -> return post(PaymentIntents, id .. "/capture", ...)
+		, cancel = \id, ... -> return post(PaymentIntents, id .. "/cancel", ...)
+		, list = \opt -> return list(PaymentIntents, opt)
+	}
+
+	var PaymentMethods = "payment_methods"
+	K.payment_methods = {
+		get = \id, opt -> return get(PaymentMethods, id, opt)
+		, create = \... -> return create(PaymentMethods, ...)
+		, update = \id, ... -> return post(PaymentMethods, id, ...)
+		, confirm = \id, ... -> return post(PaymentMethods, id .. "/confirm", ...)
+		, cancel = \id, ... -> return post(PaymentMethods, id .. "/cancel", ...)
+		, attach = \id, ... -> return post(PaymentMethods, id .. "/attach", ...)
+		, detach = \id, ... -> return post(PaymentMethods, id .. "/detach", ...)
+		, list = \opt -> return list(PaymentMethods, opt)
+	}
+
+	var PromotionCodes = "promotion_codes"
+	K.promotion_codes = {
+		get = \id -> return get(PromotionCodes, id)
+		, create = \... -> return create(PromotionCodes, ...)
+		, update = \id, ... -> return post(PromotionCodes, id, ...)
+		, list = \opt -> return list(PromotionCodes, opt)
+	}
+
+
+	var SetupIntents = "setup_intents"
+	K.setup_intents = {
+		get = \id, opt -> return get(SetupIntents, id, opt)
+		, create = \... -> return create(SetupIntents, ...)
+		, update = \id, ... -> return post(SetupIntents, id, ...)
+		, confirm = \id, ... -> return post(SetupIntents, id .. "/confirm", ...)
+		, cancel = \id, ... -> return post(SetupIntents, id .. "/cancel", ...)
+		, list = \opt -> return list(SetupIntents, opt)
+	}
+
+	var Subscriptions = "subscriptions"
+	K.subscriptions = {
+		get = \id, opt -> return get(Subscriptions, id, opt)
+		, create = \... -> return create(Subscriptions, ...)
+		, update = \id, ... -> return post(Subscriptions, id, ...)
+		, delete = \id, opt -> return delete(Subscriptions, id, opt)
+		, list = \opt -> return list(Subscriptions, opt)
+	}
+
+	var SubscriptionItems = "subscription_items"
+	K.subscription_items = {
+		create = \... -> return create(SubscriptionItems, ...)
+		, get = \id -> return get(SubscriptionItems, id)
+		, update = \id, ... -> return post(SubscriptionItems, id, ...)
+		, delete = \id -> return delete(SubscriptionItems, id)
+		, list = \opt -> return list(SubscriptionItems, opt)
+		, usage = \id, ... -> return post(SubscriptionItems, id .. "/usage_records", ...)
+		, usages = \id, opt -> return get(SubscriptionItems, id .. "/usage_record_summaries", opt)
+	}
+
+
+	var Checkouts = "checkout/sessions"
+	K.checkouts = {
+		create = \... -> return create(Checkouts, ...)
+	}
+
+	return K
+
+
+

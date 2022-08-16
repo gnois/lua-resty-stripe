@@ -1,0 +1,61 @@
+var hmac = require('resty.hmac')
+
+var Scheme = "v1"
+var Tolerance = 5 * 60  -- 5 mins
+
+var split = \str, pattern ->
+	var arr, a = {}, 1
+	if pattern and #pattern > 0
+		var pos = 1
+		for st, sp in -> return string.find(str, pattern, pos)
+			arr[a] = string.sub(str, pos, st-1)
+			a = a + 1
+			pos = sp + 1
+		arr[a] = string.sub(str, pos)
+	return arr
+
+
+var foldl = \f, acc, list ->
+	var l = 0
+	while l < #list
+		l = l + 1
+		acc = f(acc, list[l])
+	return acc
+
+
+var parse_signature = \signature, scheme ->
+	return foldl(\acc, p ->
+		var kv = split(p, '=')
+		if #kv == 2
+			var k, v = unpack(kv)
+			if k == 't'
+				acc.timestamp = tonumber(v)
+			else if k == scheme
+				table.insert(acc.signatures, v)
+		return acc
+	, {
+		timestamp = -1
+		, signatures = {}
+	}, split(signature, ','))
+
+
+
+return {
+	event = \body, signature, secret ->
+		var obj = parse_signature(signature, Scheme)
+		if obj.timestamp > 0
+			if #obj.signatures > 0
+				var hmac256 = hmac.new(@, secret, hmac.ALGOS.SHA256)
+				var sig = hmac256.final(@, obj.timestamp .. "." .. body, true)
+				for _, s in ipairs(obj.signatures)
+					--print(s)
+					if s == sig
+						var diff = ngx.time() - obj.timestamp
+						if Tolerance == 0 or diff < Tolerance
+							return json.decode(body)
+						return nil, "timestamp outside the tolerance zone"
+				return nil, "no signatures found matching the expected signature for payload"
+			return nil, "no signatures found with expected scheme"
+		return nil, "unable to extract timestamp and signatures from header"
+}
+

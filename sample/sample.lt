@@ -1,0 +1,35 @@
+var rhttp = require('resty.http')
+var stripe = require('resty.stripe')
+var helper = require('helper')
+var cred = require('credential')
+
+var Timeout = {
+	Connect = 20 * 1000
+	, Send = 20 * 1000
+	, Read = 50 * 1000
+}
+
+var http_client = ->
+	var http, err = rhttp.new()
+	if not http
+		return nil, err
+	http.set_timeouts(@, Timeout.Connect, Timeout.Send, Timeout.Read)
+	return http
+
+
+
+var test = ->
+	var api = helper(stripe(http_client(), cred.Stripe.secret))
+
+	var userid = 1
+	var email = "abc@email.com"
+	var phone = "655156718"
+	var payment_method = 'pm_card_visa'
+	var status, _, cust = api.create_customer('CreateCustomerIK', userid, email, phone, payment_method)
+
+	for k, v in pairs(cust)
+		print(k, v)
+
+
+test()
+
