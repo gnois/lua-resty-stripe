@@ -4,6 +4,13 @@
 
 ## Installation
 
+Install dependencies:
+```
+opm get ledgetech/lua-resty-http    # needed to call stripe api
+opm get jkeys089/lua-resty-hmac     # required by stripe_webhook.lua
+```
+
+Install:
 ```
 opm get gnois/lua-resty-stripe
 ```
