@@ -1,5 +1,5 @@
 --
--- Generated from helper.lt
+-- Generated from helper.lau
 --
 return function(stripe)
     local next_day = function(timestamp)

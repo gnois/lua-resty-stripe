@@ -1,5 +1,5 @@
 --
--- Generated from sample.lt
+-- Generated from sample.lau
 --
 local rhttp = require("resty.http")
 local stripe = require("resty.stripe")

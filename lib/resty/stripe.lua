@@ -1,5 +1,5 @@
 --
--- Generated from stripe.lt
+-- Generated from stripe.lau
 --
 local json = require("cjson")
 local Host = "api.stripe.com"

@@ -1,4 +1,4 @@
 --
--- Generated from credential.lt
+-- Generated from credential.lau
 --
 return {Stripe = {public = "pk_live_...eX", secret = "sk_live_...GK", webhook_secret = "whsec_......xu"}}

@@ -1,5 +1,5 @@
 --
--- Generated from stripe_webhook.lt
+-- Generated from stripe_webhook.lau
 --
 local hmac = require("resty.hmac")
 local Scheme = "v1"
