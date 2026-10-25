@@ -108,6 +108,8 @@ var encode_args = \t ->
 -- deep traverse to convert ngx.null to null in-place
 var fix_null
 fix_null = \tb ->
+	if 'table' ~= type(tb)
+		return
 	for k, v in pairs(tb)
 		if v == ngx.null
 			tb[k] = nil
@@ -118,7 +120,12 @@ fix_null = \tb ->
 -- params:
 --  a lua-resty-http client
 --  api key from stripe account
-return \client, api_key ->
+--  optional { ssl_verify = true } (default false, like the original)
+return \client, api_key, options ->
+
+	var verify = false
+	if options and options.ssl_verify == true
+		verify = true
 
 	var request = \method, path, params, header ->
 		var url = Uri .. path
@@ -142,7 +149,7 @@ return \client, api_key ->
 		var opt = {
 			method = method
 			, headers = headers
-			, ssl_verify = false  -- else unable to get local issuer certificate, or see https://github.com/ledgetech/lua-resty-http/issues/42
+			, ssl_verify = verify  -- see https://github.com/ledgetech/lua-resty-http/issues/42
 		}
 
 		if body
@@ -161,8 +168,11 @@ return \client, api_key ->
 			if res
 				var retry = res.headers['Stripe-Should-Retry']
 				if not retry or retry == "false"  -- is text
-					var data = json.decode(res.body)
-					fix_null(data)
+					var ok, data = pcall(json.decode, res.body)
+					if not ok
+						data = nil
+					if data
+						fix_null(data)
 					if res.status < 200 or res.status > 299
 						var msg = data and data.error and data.error.message
 						ngx.log(ngx.ERR, res.status, " ", msg or "stripe error without message")
@@ -216,6 +226,15 @@ return \client, api_key ->
 		, update = \id, ... -> return post(Charges, id, ...)
 		, capture = \id, ... -> return post(Charges, id .. "/capture", ...)
 		, list = \opt -> return list(Charges, opt)
+	}
+
+	var Refunds = "refunds"
+	K.refund = {
+		get = \id, opt -> return get(Refunds, id, opt)
+		, create = \... -> return create(Refunds, ...)
+		, update = \id, ... -> return post(Refunds, id, ...)
+		, cancel = \id, ... -> return post(Refunds, id .. "/cancel", ...)
+		, list = \opt -> return list(Refunds, opt)
 	}
 
 	var Customers = "customers"
@@ -318,7 +337,12 @@ return \client, api_key ->
 
 	var Checkouts = "checkout/sessions"
 	K.checkouts = {
-		create = \... -> return create(Checkouts, ...)
+		get = \id, opt -> return get(Checkouts, id, opt)
+		, create = \... -> return create(Checkouts, ...)
+		, update = \id, ... -> return post(Checkouts, id, ...)
+		, expire = \id, ... -> return post(Checkouts, id .. "/expire", ...)
+		, items = \id, opt -> return get(Checkouts, id .. "/line_items", opt)
+		, list = \opt -> return list(Checkouts, opt)
 	}
 
 	return K

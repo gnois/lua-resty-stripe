@@ -55,7 +55,7 @@ Assuming we are using [Losty](https://github.com/gnois/losty), here is how we wo
 local web = require('losty.web')()   -- instantiate once
 local body = require('losty.body')
 local content = require('losty.content')
-local wh = require('stripe_webhook')
+local wh = require('resty.stripe_webhook')
 
 local WebhookSecret = "whsec_nM......gu"
 
@@ -63,7 +63,7 @@ local w = web.route()
 
 w.post('/stripe-webhook', content.json, function(q, r)
    local raw = body.raw(q)
-   local event, err = wh.events(raw, q.headers['stripe-signature'], WebhookSecret)
+   local event, err = wh.event(raw, q.headers['stripe-signature'], WebhookSecret)
    if not event then
       ngx.log(ngx.ERR, err)
       r.status = 400

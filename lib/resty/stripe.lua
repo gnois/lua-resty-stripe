@@ -76,6 +76,9 @@ local encode_args = function(t)
 end
 local fix_null
 fix_null = function(tb)
+    if "table" ~= type(tb) then
+        return 
+    end
     for k, v in pairs(tb) do
         if v == ngx.null then
             tb[k] = nil
@@ -84,7 +87,11 @@ fix_null = function(tb)
         end
     end
 end
-return function(client, api_key)
+return function(client, api_key, options)
+    local verify = false
+    if options and options.ssl_verify == true then
+        verify = true
+    end
     local request = function(method, path, params, header)
         local url = Uri .. path
         local body
@@ -98,7 +105,7 @@ return function(client, api_key)
                 headers[k] = v
             end
         end
-        local opt = {method = method, headers = headers, ssl_verify = false}
+        local opt = {method = method, headers = headers, ssl_verify = verify}
         if body then
             if method == "GET" then
                 opt.query = body
@@ -115,8 +122,13 @@ return function(client, api_key)
             if res then
                 local retry = res.headers["Stripe-Should-Retry"]
                 if not retry or retry == "false" then
-                    local data = json.decode(res.body)
-                    fix_null(data)
+                    local ok, data = pcall(json.decode, res.body)
+                    if not ok then
+                        data = nil
+                    end
+                    if data then
+                        fix_null(data)
+                    end
                     if res.status < 200 or res.status > 299 then
                         local msg = data and data.error and data.error.message
                         ngx.log(ngx.ERR, res.status, " ", msg or "stripe error without message")
@@ -175,6 +187,18 @@ return function(client, api_key)
         return post(Charges, id .. "/capture", ...)
     end, list = function(opt)
         return list(Charges, opt)
+    end}
+    local Refunds = "refunds"
+    K.refund = {get = function(id, opt)
+        return get(Refunds, id, opt)
+    end, create = function(...)
+        return create(Refunds, ...)
+    end, update = function(id, ...)
+        return post(Refunds, id, ...)
+    end, cancel = function(id, ...)
+        return post(Refunds, id .. "/cancel", ...)
+    end, list = function(opt)
+        return list(Refunds, opt)
     end}
     local Customers = "customers"
     K.customers = {get = function(id, opt)
@@ -361,8 +385,25 @@ return function(client, api_key)
         end
     }
     local Checkouts = "checkout/sessions"
-    K.checkouts = {create = function(...)
-        return create(Checkouts, ...)
-    end}
+    K.checkouts = {
+        get = function(id, opt)
+            return get(Checkouts, id, opt)
+        end
+        , create = function(...)
+            return create(Checkouts, ...)
+        end
+        , update = function(id, ...)
+            return post(Checkouts, id, ...)
+        end
+        , expire = function(id, ...)
+            return post(Checkouts, id .. "/expire", ...)
+        end
+        , items = function(id, opt)
+            return get(Checkouts, id .. "/line_items", opt)
+        end
+        , list = function(opt)
+            return list(Checkouts, opt)
+        end
+    }
     return K
 end
